@@ -1,0 +1,7 @@
+# .gitignore
+
+# Ignorar un archivo específico
+mi_modelo.pth
+
+# Ignorar todos los archivos con extensión .pth
+*.pth
