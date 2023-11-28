@@ -1,0 +1,9 @@
+scikit-learn
+uvicorn>=0.15.0,<0.16.0
+fastapi
+torch
+torchvision
+numpy
+pydantic
+python-multipart
+PyYaml

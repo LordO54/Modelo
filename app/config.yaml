@@ -1,0 +1,23 @@
+# Lista de los nombres de las clases de sopa de lentejas
+class_names:
+  - sopa de lentejas
+  - sopa de lentejas - arroz
+  - sopa de lentejas - con chorizo
+  - sopa de lentejas - con pan
+
+# Dispositivo para el cálculo (cpu o gpu)
+device: cpu
+
+# Ruta del archivo que contiene los pesos del modelo entrenado
+model_path: mi_modelo.pth
+
+# Parámetros de las transformaciones que se aplican a las imágenes
+transform_params:
+  # Tamaño al que se cambia la imagen
+  resize: 224
+  # Tamaño del recorte central que se aplica a la imagen
+  center_crop: 224
+  # Media de los canales RGB para la normalización
+  mean: [0.485, 0.456, 0.406]
+  # Desviación estándar de los canales RGB para la normalización
+  std: [0.229, 0.224, 0.225]
