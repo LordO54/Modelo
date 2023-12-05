@@ -42,10 +42,12 @@ USER appuser
 # Copy the source code into the container.
 COPY mi_modelo.pth /code/mi_modelo.pth
 
+COPY app/config.yaml /app/config.yaml
+
 COPY . .
 
 # Expose the port that the application listens on.
-EXPOSE 8000
+EXPOSE 80
 
 # Run the application.
-CMD uvicorn app.api:app --reload --port 8000 --host 0.0.0.0
+CMD uvicorn app.api:app --reload --port 80 --host 0.0.0.0

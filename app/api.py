@@ -1,130 +1,121 @@
-print("hello world")
-
-from fastapi import FastAPI, File, UploadFile,HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 import torch
 import torchvision
+from typing import List
 import numpy as np
 from PIL import Image
 from io import BytesIO
 import yaml
+import logging
 
-#abre el archivo config
-with open("config.yaml") as f:
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Open the config file using a context manager
+with open("app/config.yaml") as f:
     config = yaml.safe_load(f)
 
-#cierra el archivo
-f.close
+# PRUEBA
+imagen_Prueba = "1366_2000.jpg"
+imagen = Image.open(imagen_Prueba)
 
-#asigna los valores del diccionario a variables locales
-clases=config["class_names"]
-device=config["device"]
-ruta_modelo=config["model_path"]
-parametros_Transform=config["transform_params"]
+# PRUEBA
+with BytesIO() as output_bytes:
+    imagen.save(output_bytes, format="JPEG")
+    imagen_bytes = output_bytes.getvalue()
 
-# Crea una instancia del mismo tipo de modelo que usaste para entrenar
+# Assign values from the dictionary to local variables
+clases = config.get("class_names", [])
+device = config.get("device", "cpu")
+ruta_modelo = config.get("model_path", "mi_modelo.pth")
+parametros_Transform = config.get("transform_params", {})
+
+# PRUEBA
+transform = torchvision.transforms.Compose([
+    torchvision.transforms.ToTensor(),
+    torchvision.transforms.Resize(parametros_Transform.get("resize", 224), antialias=True),
+    torchvision.transforms.CenterCrop(parametros_Transform.get("center_crop", 224)),
+    torchvision.transforms.Normalize(parametros_Transform.get("mean", [0.485, 0.456, 0.406]),
+                                     parametros_Transform.get("std", [0.229, 0.224, 0.225])),
+])
+image_tensor = transform(imagen).unsqueeze(0)
+
+# Load the model
 model = torchvision.models.vit_b_16(weights=None).to(device)
+try:
+    model.load_state_dict(torch.load(ruta_modelo, map_location=torch.device(device)), strict=False)
+except Exception as e:
+    logger.error(f"Error loading model: {str(e)}")
 
-# Carga el estado del modelo desde el archivo 'mi_modelo.pth'
-model.load_state_dict(torch.load('mi_modelo.pth', map_location=torch.device('cpu')),strict=False)
-
-#poner el modelo en modo evaluacion
+# Set the model to evaluation mode
 model.eval()
 
-
-# Crea una instancia de FastAPI
+# Create a FastAPI instance
 app = FastAPI()
 
-# Define la clase para el esquema de la respuesta de la API
-class Prediction(BaseModel):
-    predictions: list[tuple[str, str]]
+# Define the response model
+class PredictionResponse(BaseModel):
+    class_id: str
+    class_name: str
+    probability: float
 
-
-
-# Define la función para transformar la imagen en un tensor compatible con el modelo
+# Define the transform function
 def transform_image(image_bytes):
-    transform = torchvision.transforms.Compose([
-        torchvision.transforms.Resize(parametros_Transform["resize"]),
-        torchvision.transforms.CenterCrop(parametros_Transform["center_crop"]),
-        torchvision.transforms.Normalize(parametros_Transform["mean"],parametros_Transform["std"]),
-        torchvision.transforms.ToTensor(),
-    ])
-    #convierte la imagen en tensor
-    image=Image.open(image_bytes)
+    image = Image.open(BytesIO(image_bytes))
     return transform(image).unsqueeze(0)
 
-# Define la función para cargar el modelo desde el archivo y hacer la predicción sobre la imagen
-def get_prediction(image_tensor):
-    #Salida del modelo en base a la imagen
+# Define the function to get predictions
+def get_top_predictions(image_tensor, top_k=2):
     output = model(image_tensor)
+    output = torch.softmax(output, dim=1)
 
-    #Aplica la funcion softmax para obtener la prediccion
-    output=torch.softmax(output,dim=1)
+    # Get the top k predictions along with their probabilities
+    probabilities, indices = torch.topk(output, top_k, dim=1)
 
-    #obtiene los k valores mas altos y sus indicies
-    values, indicies= torch.topk(output,k=3)
+    # Convert indices to class names
+    class_ids = [str(idx.item()) for idx in indices[0]]
+    class_names = [clases[idx.item()] for idx in indices[0]]
 
-    #Se crea una lista vacia de predicciones
-    preddiciones=[]
+    # Create a list of Pydantic model instances
+    predictions = [
+        PredictionResponse(class_id=id, class_name=name, probability=prob.item())
+        for id, name, prob in zip(class_ids, class_names, probabilities[0])
+    ]
 
-    #Recorre ls indices y valores de 
-    for i, v in zip(indicies[0],values[0]):
-        #obtiene el valor correspodiente a la clase
-        class_name=clases[i]
+    return predictions
 
-        #convierte el numero de la probabilidad en un numero decimal
-        probabilidad=round(v.item(),2)
-
-        #se anade la tupla a la lista de predicciones
-
-    
-    #devulve la lista de tuplas con las 3 respuestas mas probables
-    return preddiciones
-
-    # Obtiene la clase predicha y su nombre
-    _, index = torch.max(output, 1)
-    class_id = str(index.item())
-    class_name = class_names[index]
-    return class_id, class_name
-
-# Define la ruta de la API para recibir una imagen y devolver una predicción
-@app.post("/predict", response_model=Prediction)
-async def predict(file: UploadFile = File(...)):
-
+# Define the predict endpoint
+@app.post("/predict", response_model=List[PredictionResponse])
+async def predict(file: UploadFile = File(...), top_k: int = 2):
     try:
+        logger.info("Starting the predict function")
 
-        # Lee el contenido del archivo subido
         image_bytes = await file.read()
 
-        #valida que el archivo no este vacio
         if not image_bytes:
-            raise HTTPException(status_code=400, detail="El archivo esta vacio")
-        
-        
-        # Convierte los bytes en un objeto BytesIO
-        image_io = BytesIO(image_bytes)
+            raise HTTPException(status_code=400, detail="The file is empty")
 
-        # Convierte el objeto BytesIO en un objeto Image
-        image = Image.open(image_io)
+        image = Image.open(BytesIO(image_bytes))
 
-        #Se valida que el archivo tenga un formato correcto
-        if image.format not in ["JPG", "PNG"]:
-            raise HTTPException(status_code=400, detail="El formato no es valido")
-        
+        if image.format.lower() not in ["jpeg", "jpg", "png"]:
+            raise HTTPException(status_code=400, detail="Invalid image format")
 
-        # Transforma la imagen en un tensor, una vez aplicadas las trasnformaciones predeterminadas
-        image_tensor = transform_image(image_io)
+        image_tensor = transform_image(image_bytes=image_bytes)
+        predictions = get_top_predictions(image_tensor=image_tensor, top_k=top_k)
 
+        logger.info("Finished the predict function")
 
-        # Obtiene la predicción del modelo sobre el tensor de imagen
-        Prediction = get_prediction(image_tensor=image_tensor)
-        # Devuelve la respuesta de la API con la clase predicha y su nombre
-        return {"Predictions": Prediction}
+        return predictions
+    except HTTPException as he:
+        logger.error(f"HTTPException in predict function: {str(he.detail)}")
+        raise
     except Exception as e:
-        #control de cualquier otro error que pudiera ocurrir
-        HTTPException(status_code=500, detail=str(e))
-        
+        logger.error(f"Error in predict function: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+# Define the home endpoint
 @app.get("/")
 def home():
-    return "hello there"
+    return "Hello there"
